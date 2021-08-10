@@ -11,10 +11,16 @@
     "require": {
         "php": ">=7.2.0"
     },
-    "require-dev": {
+    "require-master": {
 
     },
-    "minimum-stability": "dev",
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "https://github.com/gspanarin/IrbisConnector"
+        }
+    ],
+    "minimum-stability": "master",
     "autoload": {
         "psr-4": {
             "gspanarin\\IrbisConnector\\": "src/"
