@@ -1,0 +1,23 @@
+{
+    "name": "gspanarin/irbis-connector",
+    "version": "1.0",
+    "description": "Пакет классов для работы с TCP/IP сервером САБ ИРБИС64",
+    "authors": [
+        {
+            "name": "Panarin Hennadii",
+            "email": "gspanarin@gmial.com"
+        }
+    ],
+    "require": {
+        "php": ">=7.2.0"
+    },
+    "require-dev": {
+
+    },
+    "minimum-stability": "dev",
+    "autoload": {
+        "psr-4": {
+            "gspanarin\\IrbisConnector\\": "src/"
+        }
+    }
+}
