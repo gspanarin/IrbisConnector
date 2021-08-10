@@ -9,7 +9,6 @@
         }
     ],
     "require": {
-        "php": ">=5.0"
     },
     "repositories": [
         {
