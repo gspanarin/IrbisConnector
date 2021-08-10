@@ -16,7 +16,7 @@
             "url": "https://github.com/gspanarin/IrbisConnector"
         }
     ],
-    "minimum-stability": "dev",
+    "minimum-stability": "master",
     "autoload": {
         "psr-4": {
             "gspanarin\\IrbisConnector\\": "src/"
