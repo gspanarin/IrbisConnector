@@ -1,7 +1,6 @@
 <?php 
 namespace gspanarin\IrbisConnector;
 
-
 class Irbis64Record{
     public $fields;
     public $mfn;
@@ -106,41 +105,4 @@ class Irbis64Record{
         }
         return $str;
     }
-
-    /**
-    *форматирование записи
-    **/
-    function virtual_recording_format($db_name, $irbis, $format) {
-        if ($db_name==''){
-            $irbis->error_code = '-11111';
-            $irbis->error_message = 'Форматирование невозможно. Не передано название базы';
-            return false;
-        } 
-        if ($format==''){
-            $irbis->error_code = '-11111';
-            $irbis->error_message = 'Форматирование невозможно. Не передано название формата';
-            return false;
-        }
-        if ($this->serialize()==''){
-            $irbis->error_code = '-11111';
-            $irbis->error_message = 'Форматирование невозможно. Не передана запись';
-            return false;
-        }
-   
-        $packet = implode("\n", array('G', $irbis->arm, 'G', $irbis->id, $irbis->seq, '', '', '', '', '', $db_name, $format, '-2', $this->serialize()));
-        $packet = strlen($packet) . "\n" . $packet;
-
-        $answer = $irbis->send($packet);
-        if ($answer === false) {
-            return false;
-        }
-        $irbis->error_code = $answer[10];
-        if (array_key_exists(11, $answer)){
-            //return array_slice($answer, 11);
-            return $answer[11];
-        } else {
-            return '';
-        }
-    }
-
 }
