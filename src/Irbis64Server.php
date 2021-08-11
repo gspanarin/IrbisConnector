@@ -1,8 +1,8 @@
 <?php
-
 namespace gspanarin\IrbisConnector;
 
-//use Irbis64Record;
+use gspanarin\IrbisConnector\Irbis64Record;
+
 
 class Irbis64Server { 
     //Выводить отладочную информацию по обмену данными с сервером
@@ -15,10 +15,15 @@ class Irbis64Server {
     private $id = ''; 
     private $seq = 1;
     private $arm = 'C'; // Каталогизатор
-   
-
-    function __construct($param = []) { 
-        $this->set_id(rand(100000, 999999));
+    private $ini = null;
+    private $server_timeout = 0;
+    private $server_version = '';
+    
+    /*
+     * При создании объекта коннектора, тнициализируем его данными
+     */
+    public function __construct($param = []) { 
+        $this->id = rand(100000, 999999);
         if (isset($param['host']))
             $this->host = $param['host'];
         
@@ -32,223 +37,282 @@ class Irbis64Server {
             $this->pass = $param['password'];
     }
     
-    function __destruct() { 
+    /*
+     * Разрегистрируемся на сервере Ирбиса при уничтожении объекта коннектора
+     */
+    public function __destruct() { 
         $this->logout(); 
     }
    
-    public function setServer($ip, $port = 6666) { 
-        $this->ip = $ip; 
-        $this->port = (int)$port; 
-    }
     
-    function setUser($login, $pass) { 
-        $this->login = $login; 
-        $this->pass = $pass; 
-    }
-    
-    function set_arm($arm) { 
+    public function setArm($arm) { 
         $this->arm = $arm;
     }
     
+    public function getINI(){
+        return $this->ini;
+    }
 
-
+    public function setDebug($value){
+        $this->print_message = $value;
+    }
    
 
+    public function error($code = '') : string {
+        if ($code == '') 
+            $code = $this->error_code;
 
-   function error($code = '') {
-      if ($code == '') $code = $this->error_code;
+        switch ($code) {
+            case '0': return 'Ошибки нет';
+            case '1': return 'Подключение к серверу не удалось';
+            case '-2222': return 'Ошибка протокола. Возможно не соответствие версий сервера и клиента(WRONG_PROTOCOL)'; 
+            case '-3333': return 'Пользователь не существует'; 
+            case '-3337': return 'Пользователь уже зарегистрирован'; 
+            case '-4444': return 'Пароль не подходит'; 
+            case '-140':  return 'MFN за пределами базы'; 
+            case '-5555': return 'База не существует'; 
+            case '-400': 	return 'Ошибка при открытии файла mst или xrf'; 
+            case '-603': 	return 'Запись логически удалена'; 
+            case '-601': 	return 'Запись удалена'; 
+            case '-202': 	return 'Термин не существует'; 
+            case '-203': 	return 'TERM_LAST_IN_LIST'; 
+            case '-204': 	return 'TERM_FIRST_IN_LIST'; 
+            case '-608': 	return 'Не совпадает номер версии у сохраняемой записи'; 
+        }
+        return 'Неизвестная ошибка: ' . $code;
+    }
+
+    private function connect() {
+        $this->sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        if ($this->sock === false){
+            $this->error = socket_last_error();
+            return false;
+        } 
+        return (@socket_connect($this->sock, $this->ip, $this->port));
+    }
+
+    /*
+    * Регистрация на сервере Ирбиса
+    */
+    public function login() : bool {
+        $packet = implode("\n", array(
+            'A', 
+            $this->arm, 
+            'A', 
+            $this->id, 
+            $this->seq, 
+            '', 
+            '', 
+            '', 
+            '', 
+            '', 
+            $this->login, 
+            $this->pass));
+        $packet = strlen($packet)."\n".$packet;
+        $answer = $this->send($packet);
       
-      switch ($code) {
-      case '0': return 'Ошибки нет';
-      case '1': return 'Подключение к серверу не удалось';
-      case '-2222': return 'Ошибка протокола. Возможно не соответствие версий сервера и клиента(WRONG_PROTOCOL)'; 
-      case '-3333': return 'Пользователь не существует'; 
-      case '-3337': return 'Пользователь уже зарегистрирован'; 
-      case '-4444': return 'Пароль не подходит'; 
-      case '-140':  return 'MFN за пределами базы'; 
-      case '-5555': return 'База не существует'; 
-      case '-400': 	return 'Ошибка при открытии файла mst или xrf'; 
-      case '-603': 	return 'Запись логически удалена'; 
-      case '-601': 	return 'Запись удалена'; 
-      case '-202': 	return 'Термин не существует'; 
-      case '-203': 	return 'TERM_LAST_IN_LIST'; 
-      case '-204': 	return 'TERM_FIRST_IN_LIST'; 
-      case '-608': 	return 'Не совпадает номер версии у сохраняемой записи'; 
-      }
-      return 'Неизвестная ошибка: ' . $code;
+        if ($answer === false) {
+            $this->error_code = 1;
+            return false;
+        }
+      
+        $this->error_code = $answer[10];
+        if ($this->error_code != 0) 
+            return false;
+        
+        $this->server_timeout = $answer[11];
+        $this->server_version = $answer[4];
+      
+        $this->ini = array();
+        $section = '';
+        for ($i = 12; $i < count($answer); $i++){
+            if (substr(trim($answer[$i]),0,1) == '#'){
+                
+            }elseif (substr(trim($answer[$i]),0,1) == '['){
+                $section = mb_strtolower(substr(trim($answer[$i]), 1, strlen(trim($answer[$i])) - 2));
+            }else{
+                $tmp = explode('=', trim($answer[$i])); 
+                if (!array_key_exists(1, $tmp)) $tmp[1] = '';
+                $this->ini[$section][mb_strtolower($tmp[0])] = $tmp[1];
+            }
+        }
+        
+        return true;
+    }
+
+
+    /** 
+    * Разрегистрация
+    **/
+    function logout() : bool {
+        $packet = implode("\n", array(
+          'B', $this->arm, 'B', $this->id, $this->seq, $this->login, $this->pass, '', '', '', '', ''));
+        $packet = strlen($packet) . "\n" . $packet;
+        $answer = $this->send($packet);
+      
+        if ($answer === false) 
+            return false;
+        
+        $this->error_code = $answer[10];
+        if ($this->error_code != 0) 
+            return false;
+        
+        return true;
    }
 
 
-   function connect() {
-      $this->sock = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-      if ($this->sock === false){
-         $this->error = socket_last_error();
-         return false;
-      } 
-      return (@socket_connect($this->sock, $this->ip, $this->port));
-   }
-
-
-   // Регистрация на сервере Ирбиса
-   function login() {
-      /*if ($this->arm=''){
-         $this->error = 'Не указан тип АРМа';
-         return false;
-      }
-      if ($this->login=''){
-         $this->error = 'Не указан логин';
-         return false;
-      }
-      if ($this->pass=''){
-         $this->error = 'Не указан пароль';
-         return false;
-      }*/
+    /** 
+    * Установка параметров в ини-файле
+    **/
+    function Set_ini_param($section, $parameter){
+        $packet = implode("\n", array(
+            '8', 
+            $this->arm, 
+            '8', 
+            $this->id, 
+            $this->seq, 
+            $this->pass, 
+            $this->login, 
+            '', 
+            '', 
+            '', 
+            $section, 
+            $parameter));
+        $packet = strlen($packet) . "\n" . $packet;
+        $answer = $this->send($packet);
       
-      $packet = implode("\n", array('A', $this->arm, 'A', $this->id, $this->seq, '', '', '', '', '', $this->login, $this->pass));
-      $packet = strlen($packet)."\n".$packet;
-      $answer = $this->send($packet);
-      
-      if ($answer === false) {
-         $this->error_code = 1;
-         return false;
-      }
-      
-      $this->error_code = $answer[10];
-      if ($this->error_code != 0) return false;
-      $this->server_timeout = $answer[11];
-      $this->server_ver     = $answer[4];
-      
-      $this->ini = array();
-      $section='';
-      for ($i=12; $i<count($answer);$i++){
-         if (substr(trim($answer[$i]),0,1)=='#'){}
-         elseif (substr(trim($answer[$i]),0,1)=='['){
-            $section = mb_strtolower(substr(trim($answer[$i]),1,strlen(trim($answer[$i]))-2));
-         }
-         else{
-            $tmp = explode('=',trim($answer[$i])); 
-            if (!array_key_exists(1,$tmp)) $tmp[1] = '';
-            $this->ini[$section][mb_strtolower($tmp[0])] = $tmp[1];
-         }
-      }
-      return true;
-   }
-
-
-   /** 
-   * Разрегистрация
-   **/
-   function logout() {
-      $packet = implode("\n", array('B', $this->arm, 'B', $this->id, $this->seq, $this->login, $this->pass, '', '', '', '', ''));
-      $packet = strlen($packet) . "\n" . $packet;
-      $answer = $this->send($packet);
-      
-      if ($answer === false) return false;
-      $this->error_code = $answer[10];
-      if ($this->error_code != 0) return false;
-      return true;
-   }
-
-
-   /** 
-   * Установка параметров в ини-файле
-   **/
-   function Set_ini_param($section, $parameter){
-      $packet = implode("\n", array('8', $this->arm, '8', $this->id, $this->seq, $this->pass, $this->login, '', '', '', $section, $parameter));
-      $packet = strlen($packet) . "\n" . $packet;
-      $answer = $this->send($packet);
-      
-      if ($answer === false) return false;
-      $this->error_code = $answer[10];
-      if ($this->error_code != 0) return false;
-      return true;
-   }
+        if ($answer === false) 
+            return false;
+        
+        $this->error_code = $answer[10];
+        if ($this->error_code != 0) 
+            return false;
+        
+        return true;
+    }
    
    
-   /**
-   *    Получить максимальный MFN в базе
-   **/
-   function mfn_max($db_name) {
-      $packet = implode("\n", array('O', $this->arm, 'O', $this->id, $this->seq, '', '', '', '', '', $db_name));
-      $packet = strlen($packet) . "\n" . $packet;
-      $answer = $this->send($packet);
-      
-      if ($answer === false) return false;
-      $this->error_code = $answer[10];
-      
-      if ($this->error_code > 0) {
-         $this->error_code = 0;
-         return $answer[10];
-      } else {
-         return false;
-      }
-   }
+    /**
+    *    Получить максимальный MFN в базе
+    **/
+    function getMaxMfn($db_name) : int {
+        $packet = implode("\n", array(
+            'O', 
+            $this->arm, 
+            'O', 
+            $this->id, 
+            $this->seq, 
+            '', 
+            '', 
+            '', 
+            '', 
+            '', 
+            $db_name));
+        $packet = strlen($packet) . "\n" . $packet;
+        $answer = $this->send($packet);
+
+        if ($answer === false) 
+            return false;
+        $this->error_code = $answer[10];
+
+        if ($this->error_code > 0) {
+            $this->error_code = 0;
+            return (int) $answer[10];
+        } else {
+            return false;
+        }
+    }
 
 
-   /**
-   * получение терминов словаря (индексов)
-   **/
-   function terms_read($db_name, $key, $term, $num_terms = 10, $format = '') {
-      if ($db_name=='') {
-         $this->error_code = '-11111';
-         $this->error_message = 'Чтение словаря не будет выполнено. Не передано название базы';
-      }
-      
-      //Проверяем, что бы словарь был внесен в список дозволенных
-      if (array_key_exists($key,$this->dict)) {
-      
-         $packet = implode("\n", array('H', $this->arm, 'H', $this->id, $this->seq, '', '', '', '', '', $db_name, $this->dict[$key].$term, $num_terms, $format));
-         $packet = strlen($packet) . "\n" . $packet;
-         $answer = $this->send($packet);
-         
-         if ($answer === false) return false;
-         $this->error_code = $answer[10];
-         if (($this->error_code == 0) or ($this->error_code == -202) or ($this->error_code == -203) or ($this->error_code == -204)) {
+    /**
+    * получение терминов словаря (индексов)
+    **/
+    function terms_read($db_name, $key, $term, $num_terms = 10, $format = '') {
+        if ($db_name=='') {
+            $this->error_code = '-11111';
+            $this->error_message = 'Чтение словаря не будет выполнено. Не передано название базы';
+        }
+
+        $packet = implode("\n", array(
+            'H', 
+            $this->arm, 
+            'H', 
+            $this->id, 
+            $this->seq, 
+            '', 
+            '', 
+            '', 
+            '', 
+            '', 
+            $db_name, 
+            $key, 
+            $num_terms, 
+            $format));
+        $packet = strlen($packet) . "\n" . $packet;
+        $answer = $this->send($packet);
+
+        if ($answer === false) 
+            return false;
+
+        $this->error_code = $answer[10];
+        if (($this->error_code == 0) or ($this->error_code == -202) or ($this->error_code == -203) or ($this->error_code == -204)) {
             // массив $terms
             $terms = array();
             $c = count($answer) - 1;
             for ($i = 11; $i < $c; $i++) {
-               $tmp = explode('#',$answer[$i]);
-               if (mb_substr($tmp[1], 0, strlen($this->dict[$key]))==$this->dict[$key]){
-                  $tmp[1] = mb_substr($tmp[1],strlen($this->dict[$key]));
-                  $terms[] = array('term' => $tmp[1], 'count' => $tmp[0]);
-               }
+                $tmp = explode('#',$answer[$i]);
+                if (mb_substr($tmp[1], 0, strlen($key)) == $key){
+                    $tmp[1] = mb_substr($tmp[1], strlen($key));
+                    $terms[] = array('term' => $tmp[1], 'count' => $tmp[0]);
+                }
             }
             return $terms;
-         } else {
+        } else {
             return false;
-         }
-      } else {
-         $this->error = 'Мнемоническое название словаря '.$key.' отсутствует в списке допустимых';
-         return false;
-      }
-   }
+        }
+    }
 
 
 
     // Прочитать запись
-    function record_read($db_name, $mfn, $lock = false) {
+    function getRecord($db_name, $mfn, $lock = false) {
         if ($mfn=='') {
-           $this->error_code = '-11111';
-           $this->error_message = 'Чтение не будет выполнено. Не передан MFN записи';
+            $this->error_code = '-11111';
+            $this->error_message = 'Чтение не будет выполнено. Не передан MFN записи';
         }
         if ($db_name=='') {
-           $this->error_code = '-11111';
-           $this->error_message = 'Чтение не будет выполнено. Не передано название базы';
+            $this->error_code = '-11111';
+            $this->error_message = 'Чтение не будет выполнено. Не передано название базы';
         }
       
-        $packet = implode("\n", array('C', $this->arm, 'C', $this->id, $this->seq, '', '', '', '', '', $db_name, $mfn, $lock ? 1 : 0));
+        $packet = implode("\n", array(
+            'C', 
+            $this->arm, 
+            'C', 
+            $this->id, 
+            $this->seq, 
+            '', 
+            '', 
+            '', 
+            '', 
+            '', 
+            $db_name, 
+            $mfn, 
+            $lock ? 1 : 0));
         $packet = strlen($packet) . "\n" . $packet;
         $answer = $this->send($packet);
 
-        if ($answer === false) return false;
+        if ($answer === false) 
+            return false;
+        
         $this->error_code = $answer[10];
-        if ($this->error_code != 0) return false;
+        if ($this->error_code != 0) 
+            return false;
 
         $mfn_status  = explode('#', $answer[11]);
         $rec_version = explode('#', $answer[12]);
 
-        $record = new irbis64_record;
+        $record = new irbis64Record;
 
         $record->mfn = $mfn_status[0];
         $record->status = (isset($mfn_status[1]) && $mfn_status[1] != '') ? $mfn_status[1] : 0;
